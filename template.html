@@ -156,7 +156,7 @@
                 }).join(' ');
 
                 // Display the formatted coordinates in the text box
-                document.getElementById('coordinatesBox').textContent = 'Polygon Coordinates:' + formattedCoordinates;
+                document.getElementById('coordinatesBox').innerHTML = '<b>Polygon Coordinates:</b><br>' + formattedCoordinates;
 
                 cmd = 'GEOSEARCH MAP BYPOLYGON' + formattedCoordinates;
 
