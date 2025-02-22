@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geo Coordinates Map with Polygon and Circle Marker</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <style>
+        #map { height: 600px; }
+        #coordinatesBox {
+            width: 100%;
+            height: 150px;
+            margin-top: 20px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-y: scroll;
+        }
+    </style>
+</head>
+<body>
+    <h1>Geo Coordinates Map with Polygon and Circle Marker</h1>
+    <div id="map"></div>
+    <br>
+    <button id="submitPolygon">Get Polygon Coords</button>
+    <button id="submitLocations">Get Location Coords</button>
+    <button id="clearMap">Clear Map</button>
+    <button id="loadValkeyData">Load Valkey Data</button>
+
+
+    <div id="coordinatesBox" placeholder="Polygon coordinates will appear here..."></div>
+    <div id="locationBox" placeholder="Location coordinates will appear here..."></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script>
+        // Create the map
+        var map = L.map('map').setView([38.0, 15.0], 7);
+
+        // Add the OpenStreetMap tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // Initialize the Leaflet Draw control
+        var drawnItems = new L.FeatureGroup();
+        map.addLayer(drawnItems);
+
+        // Define the drawing controls
+        var drawControl = new L.Control.Draw({
+            edit: {
+                featureGroup: drawnItems
+            },
+            draw: {
+                polygon: true,  // Allow drawing polygons
+                circle: false,  // Disable the circle drawing tool (not radius-expanding)
+                rectangle: false,
+                marker: false,
+                polyline: false
+            }
+        });
+
+        map.addControl(drawControl);
+
+        var drawnPolygon = null; // Store the drawn polygon
+        var activeTool = null; // Track the active tool: 'circlemarker' or 'polygon'
+        locationMarkers = [];
+        geoMarkers = [];
+        // Event handler when a drawing tool is selected
+        map.on('draw:drawstart', function(event) {
+            if (event.layerType === 'circlemarker') {
+                activeTool = 'circlemarker';  // The user selected the circle marker tool
+            } else {
+                activeTool = 'polygon';  // The user selected the polygon tool
+            }
+        });
+
+        // Event handler when a drawing tool is used (polygon or circle)
+        map.on('draw:created', function(event) {
+            var layer = event.layer;
+            drawnItems.addLayer(layer);
+            if (activeTool === 'circlemarker') {
+                // Reverse geocode the location to get the name
+                var url = `https://nominatim.openstreetmap.org/reverse?lat=${layer._latlng.lat}&lon=${layer._latlng.lng}&format=json&addressdetails=1`;
+                fetch(url)
+                    .then(response => response.json())
+                    .then(data => {
+                        var placeName = data.display_name || "Unknownlocation";
+                        locationMarkers.push({
+                            lon: layer._latlng.lng,
+                            lat: layer._latlng.lat,
+                            name: placeName
+                        });
+                    })
+                    .catch(error => {
+                        console.error("Geocoding error:", error);
+                        // callback("Unknown location");
+                    });
+                // Customize the circle marker style
+                layer.setStyle({
+                    color: 'red',
+                    weight: 2,
+                    fillOpacity: 0.4,
+                    fillColor: 'red'
+                });
+                // Optionally, you can store the circle marker location if needed
+            } else if (activeTool === 'polygon') {
+                drawnPolygon = layer;
+            }
+        });
+
+        // Submit button for locations
+        document.getElementById('submitLocations').addEventListener('click', function() {
+            if (locationMarkers.length > 0) {
+                var locationsSummary = 'Location Coordinates:'
+                for (var i = 0; i < locationMarkers.length; i++) {
+                    var marker = locationMarkers[i];
+                    locationsSummary += ' ' + marker.lon + ' ' + marker.lat + ' "' + marker.name + '"'
+                }
+
+                // Display the formatted locations in the text box
+                document.getElementById('locationBox').textContent = locationsSummary;
+            } else {
+                alert("No locations to submit!");
+            }
+        });
+
+        // Submit the drawn polygon to the server when the submit button is clicked
+        document.getElementById('submitPolygon').addEventListener('click', function() {
+            if (drawnPolygon) {
+                // Get coordinates of the drawn polygon
+                var latLngs = drawnPolygon.getLatLngs ? drawnPolygon.getLatLngs()[0].map(function(latLng) {
+                    return [latLng.lng, latLng.lat]; // Convert to [lon, lat] format
+                }) : [];
+
+                // Format the coordinates in the required format
+                var formattedCoordinates = 'Polygon Coordinates: ' + latLngs.length + ' ' + latLngs.map(function(coord) {
+                    return coord[0] + ' ' + coord[1];
+                }).join(' ');
+
+                // Display the formatted coordinates in the text box
+                document.getElementById('coordinatesBox').textContent = formattedCoordinates;
+
+                // Send the polygon data to the backend
+                fetch('/submit_polygon', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ coordinates: latLngs })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert("Polygon submitted successfully!");
+                })
+                .catch(error => {
+                    alert("Error submitting polygon!");
+                });
+            } else {
+                alert("Please draw a polygon or circle first!");
+            }
+        });
+
+        document.getElementById('loadValkeyData').addEventListener('click', function() {
+            // Send a GET request to fetch the coordinates from the backend
+            fetch('/load_valkey_data')
+            .then(response => response.json())
+            .then(data => {
+                console.log(data);
+                if (data.geo_data) {
+                    renderGeoData(data.geo_data);  // Call the function to render the data
+                } else {
+                    alert("No geo data available.");
+                }
+            })
+            .catch(error => {
+                alert("Error fetching coordinates!");
+            });
+        });
+
+        function renderGeoData(geoData) {
+            // Clear existing markers if needed
+            // drawnItems.clearLayers();
+            // Check if geo data is available
+            if (geoData.length === 0) {
+                alert("No coordinates available to render on the map.");
+                return;
+            }
+            // Iterate over the geoData and place a marker for each location
+            geoData.forEach(item => {
+                const lat = item.lat;
+                const lng = item.lng;
+                const member = item.member;
+                console.log(member);
+                // Create a marker for each geo location
+                const marker = L.marker([lat, lng]).addTo(map);
+                geoMarkers.push(marker);
+                // Optionally, you can add a popup to the marker showing the member name
+                marker.bindPopup(`<b>${member}</b><br>Lat: ${lat}<br>Lng: ${lng}`).openPopup();
+            });
+        }
+
+        // Event handler to clear the map when the clear button is clicked
+        document.getElementById('clearMap').addEventListener('click', function() {
+            locationMarkers = [];
+            drawnItems.clearLayers(); // Clears all layers from the drawnItems feature group
+            document.getElementById('coordinatesBox').textContent = ''; // Clear the coordinates box
+            document.getElementById('locationBox').textContent = '';
+            drawnPolygon = null; // Reset the drawnPolygon variable
+            activeTool = null; // Reset the active tool
+            geoMarkers.forEach(marker => {
+                map.removeLayer(marker); // Remove each marker from the map
+            });
+            // Clear the geoMarkers array
+            geoMarkers = [];
+        });
+    </script>
+</body>
+</html>
