@@ -69,9 +69,9 @@ def load_valkey_data():
             print(f"Position for {member}: {pos}")  # Debugging line to print each position
             if pos and pos[0]:
                 geo_data.append({
-                    "member": member.decode("utf-8"),  # Decode byte string to string
+                    "name": member.decode("utf-8"),  # Decode byte string to string
                     "lat": pos[0][1],
-                    "lng": pos[0][0]
+                    "lon": pos[0][0]
                 })
     except Exception as e:
         print("error in load_valkey_data: " + str(e))

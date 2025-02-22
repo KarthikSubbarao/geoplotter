@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Geo Coordinates Map with Polygon and Circle Marker</title>
+    <title>Geo Coordinates Map supporting Polygon based location search on Valkey</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
     <style>
@@ -20,7 +20,7 @@
     </style>
 </head>
 <body>
-    <h1>Geo Coordinates Map with Polygon and Circle Marker</h1>
+    <h1>Geo Coordinates Map with Polygon based location searching</h1>
     <div id="map"></div>
     <br>
     <button id="submitPolygon">List Polygon Coords and Search</button>
@@ -128,15 +128,7 @@
                 .then(data => {
                     if (data.success) {
                         // If the backend responds successfully, display the locations in the text box
-                        var locationsSummary = "<strong>Locations:</strong><br>";
-                        locationsSummary += "Number of Locations: " + locationMarkers.length + "<br>Location Coords:<ul>";
-                        // Loop through the location markers
-                        for (var i = 0; i < locationMarkers.length; i++) {
-                            var marker = locationMarkers[i];
-                            locationsSummary += "<li>" + marker.lon + " " + marker.lat + " '" + marker.name + "'</li>";
-                        }
-                        locationsSummary += "</ul>";
-                        document.getElementById('locationBox').innerHTML = locationsSummary;
+                        updateLocationSummary(locationMarkers, 'locationBox', false);
                     } else {
                         alert("Error submitting locations!");
                     }
@@ -193,6 +185,25 @@
             }
         });
 
+        function updateLocationSummary(locationMarkers, elementId, whileLoading) {
+            var locationsSummary = "";
+            // Update the message based on the 'whileLoading' flag
+            if (whileLoading) {
+                locationsSummary = "<strong>Locations Loaded:</strong><br>";
+            } else {
+                locationsSummary = "<strong>Locations Saved:</strong><br>";
+            }
+            locationsSummary += "Number of Locations: " + locationMarkers.length + "<br>Location Coords:<ul>";
+            // Loop through the location markers
+            for (var i = 0; i < locationMarkers.length; i++) {
+                var marker = locationMarkers[i];
+                locationsSummary += "<li>" + marker.lon + " " + marker.lat + " '" + marker.name + "'</li>";
+            }
+
+            locationsSummary += "</ul>";
+            document.getElementById(elementId).innerHTML = locationsSummary;
+        }
+
         function renderGeoSearch(geoData) {
             // Clear existing markers if needed
             // drawnItems.clearLayers();
@@ -243,8 +254,8 @@
             // Iterate over the geoData and place a marker for each location
             geoData.forEach(item => {
                 const lat = item.lat;
-                const lng = item.lng;
-                const member = item.member;
+                const lng = item.lon;
+                const member = item.name;
                 console.log(member);
                 // Create a marker for each geo location
                 const marker = L.marker([lat, lng]).addTo(map);
@@ -252,6 +263,7 @@
                 // Optionally, you can add a popup to the marker showing the member name
                 marker.bindPopup(`<b>${member}</b><br>Lat: ${lat}<br>Lng: ${lng}`).openPopup();
             });
+            updateLocationSummary(geoData, 'locationBox', true);
         }
 
         // Event handler to clear the map when the clear button is clicked
