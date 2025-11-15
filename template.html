@@ -23,15 +23,44 @@
     <h1>Geo Coordinates Map with Polygon based location searching</h1>
     <div id="map"></div>
     <br>
-    <button id="submitPolygon">List Polygon Coords and Search</button>
-    <button id="submitLocations">List Location Coords and Save</button>
-    <button id="loadFromValkey">Load from Valkey Server</button>
     <button id="clearMap">Clear Screen</button>
     <button id="flushValkey">Flush Valkey Server</button>
+    
+    <h3>Standard GEO Commands</h3>
+    <button id="submitPolygon">List Polygon Coords and Search</button>
+    <button id="submitLocations">List Location Coords and Save</button>
+    <button id="loadFromValkey">Load standard Geoindexes from Valkey Server</button>
+    
+    <h3>Geofence Commands</h3>
+    <input type="text" id="indexName" placeholder="Index name (default: gf_index)" style="margin-right: 10px;">
+    <button id="gfAddPoints">GF.ADD Points</button>
+    <button id="gfAddPolygon">GF.PADD Polygon</button>
+    <br><br>
+    <select id="searchType" style="margin-right: 10px;">
+        <option value="WITHIN">WITHIN</option>
+        <option value="CONTAINS">CONTAINS</option>
+        <option value="INTERSECTS">INTERSECTS</option>
+    </select>
+    <button id="gfSearchPoly">GF.SEARCH from Polygon</button>
+    <button id="gfSearchCoord">GF.SEARCH from Coordinates</button>
+    <br><br>
+    <select id="clusterAlgorithm" style="margin-right: 10px;">
+        <option value="GEOHASH">GEOHASH</option>
+        <option value="KMEANS">KMEANS</option>
+    </select>
+    <span id="clusterInputs">
+        <input type="number" id="precision" placeholder="Precision (1-12)" min="1" max="12" style="width: 120px; margin-right: 5px;">
+        <input type="number" id="clusters" placeholder="K clusters" min="1" style="width: 100px; margin-right: 5px; display: none;">
+    </span>
+    <input type="number" id="maxCount" placeholder="Max count" min="1" style="width: 100px; margin-right: 5px;">
+    <button id="gfCluster">GF.CLUSTER</button>
+    <br><br>
+    <button id="loadGeofenceData">Load from Geofence Index</button>
 
     <div id="coordinatesBox" placeholder="Polygon coordinates will appear here..."></div>
     <div id="locationBox" placeholder="Location coordinates will appear here..."></div>
     <div id="searchResults" placeholder="Polygon Search Results Appear Here"></div>
+    <div id="geofenceResults" placeholder="Geofence Results Appear Here"></div>
 
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
@@ -57,8 +86,9 @@
                 polygon: true,  // Allow drawing polygons
                 circle: false,  // Disable the circle drawing tool (not radius-expanding)
                 rectangle: false,
-                marker: false,
-                polyline: false
+                marker: true,   // Enable marker drawing for points
+                polyline: false,
+                circlemarker: true  // Enable circle marker for points
             }
         });
 
@@ -70,24 +100,24 @@
         geoMarkers = [];
         // Event handler when a drawing tool is selected
         map.on('draw:drawstart', function(event) {
-            if (event.layerType === 'circlemarker') {
-                activeTool = 'circlemarker';  // The user selected the circle marker tool
+            if (event.layerType === 'circlemarker' || event.layerType === 'marker') {
+                activeTool = 'marker';  // The user selected a marker tool
             } else {
                 activeTool = 'polygon';  // The user selected the polygon tool
             }
         });
 
-        // Event handler when a drawing tool is used (polygon or circle)
+        // Event handler when a drawing tool is used (polygon or marker)
         map.on('draw:created', function(event) {
             var layer = event.layer;
             drawnItems.addLayer(layer);
-            if (activeTool === 'circlemarker') {
+            if (activeTool === 'marker') {
                 // Reverse geocode the location to get the name
                 var url = `https://nominatim.openstreetmap.org/reverse?lat=${layer._latlng.lat}&lon=${layer._latlng.lng}&format=json&addressdetails=1`;
                 fetch(url)
                     .then(response => response.json())
                     .then(data => {
-                        var placeName = data.display_name || "Unknownlocation";
+                        var placeName = data.display_name || "Unknown_location_" + Date.now();
                         locationMarkers.push({
                             lon: layer._latlng.lng,
                             lat: layer._latlng.lat,
@@ -96,18 +126,39 @@
                     })
                     .catch(error => {
                         console.error("Geocoding error:", error);
-                        // callback("Unknown location");
+                        locationMarkers.push({
+                            lon: layer._latlng.lng,
+                            lat: layer._latlng.lat,
+                            name: "Unknown_location_" + Date.now()
+                        });
                     });
-                // Customize the circle marker style
-                layer.setStyle({
-                    color: 'red',
-                    weight: 2,
-                    fillOpacity: 0.4,
-                    fillColor: 'red'
-                });
-                // Optionally, you can store the circle marker location if needed
+                // Customize marker style if it's a circlemarker
+                if (layer.setStyle) {
+                    layer.setStyle({
+                        color: 'red',
+                        weight: 2,
+                        fillOpacity: 0.4,
+                        fillColor: 'red'
+                    });
+                }
             } else if (activeTool === 'polygon') {
                 drawnPolygon = layer;
+                // Add popup to drawn polygon
+                var polygonName = 'drawn_polygon_' + Date.now();
+                var coordinates = layer.getLatLngs()[0];
+                var color = getPolygonColor(polygonName);
+                
+                layer.setStyle({
+                    color: color,
+                    fillColor: color,
+                    fillOpacity: 0.3,
+                    weight: 3
+                });
+                
+                layer.bindPopup(`<b>${polygonName}</b><br>Drawn Polygon with ${coordinates.length} vertices<br>Color: ${color}<br>Status: Not saved to geofence`);
+                layer.on('click', function() {
+                    this.openPopup();
+                });
             }
         });
 
@@ -273,13 +324,18 @@
             document.getElementById('coordinatesBox').textContent = ''; // Clear the coordinates box
             document.getElementById('locationBox').textContent = '';
             document.getElementById('searchResults').textContent = '';
+            document.getElementById('geofenceResults').textContent = '';
             drawnPolygon = null; // Reset the drawnPolygon variable
             activeTool = null; // Reset the active tool
             geoMarkers.forEach(marker => {
                 map.removeLayer(marker); // Remove each marker from the map
             });
-            // Clear the geoMarkers array
+            clusterMarkers.forEach(marker => {
+                map.removeLayer(marker); // Remove cluster markers
+            });
+            // Clear the arrays
             geoMarkers = [];
+            clusterMarkers = [];
         });
 
         // Event handler to clear the map when the clear button is clicked
@@ -294,6 +350,7 @@
                     document.getElementById('coordinatesBox').textContent = ''; // Clear the coordinates box
                     document.getElementById('locationBox').textContent = '';
                     document.getElementById('searchResults').textContent = '';
+                    document.getElementById('geofenceResults').textContent = '';
                     drawnPolygon = null; // Reset the drawnPolygon variable
                     activeTool = null; // Reset the active tool
                     geoMarkers.forEach(marker => {
@@ -309,6 +366,375 @@
                 alert("Error while flushing valkey server");
             });
         });
+
+        // Geofence event handlers
+        var clusterMarkers = [];
+        var polygonColors = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 'darkpurple', 'white', 'pink', 'lightblue', 'lightgreen', 'gray', 'black', 'lightgray'];
+        var polygonColorIndex = 0;
+        var polygonColorMap = {}; // Track colors by polygon name
+        
+        function getIndexName() {
+            return document.getElementById('indexName').value || 'gf_index';
+        }
+        
+        function getPolygonColor(polygonName) {
+            if (!polygonColorMap[polygonName]) {
+                polygonColorMap[polygonName] = polygonColors[polygonColorIndex % polygonColors.length];
+                polygonColorIndex++;
+            }
+            return polygonColorMap[polygonName];
+        }
+        
+        function updateClusterInputs() {
+            var algorithm = document.getElementById('clusterAlgorithm').value;
+            var precisionInput = document.getElementById('precision');
+            var clustersInput = document.getElementById('clusters');
+            
+            if (algorithm === 'GEOHASH') {
+                precisionInput.style.display = 'inline';
+                clustersInput.style.display = 'none';
+            } else if (algorithm === 'KMEANS') {
+                precisionInput.style.display = 'none';
+                clustersInput.style.display = 'inline';
+            }
+        }
+        
+        // Add event listener for algorithm change
+        document.getElementById('clusterAlgorithm').addEventListener('change', updateClusterInputs);
+        
+        // Initialize cluster inputs on page load
+        updateClusterInputs();
+
+        document.getElementById('gfAddPoints').addEventListener('click', function() {
+            if (locationMarkers.length === 0) {
+                alert('No points to add. Please add some markers first.');
+                return;
+            }
+            
+            fetch('/gf_add_points', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    locationMarkers: locationMarkers,
+                    indexName: getIndexName()
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('geofenceResults').innerHTML = 
+                        `<strong>GF.ADD Success:</strong><br>Added ${data.count} points to index '${getIndexName()}'`;
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => alert('Error adding points: ' + error));
+        });
+
+        document.getElementById('gfAddPolygon').addEventListener('click', function() {
+            if (!drawnPolygon) {
+                alert('No polygon drawn. Please draw a polygon first.');
+                return;
+            }
+            
+            var latLngs = drawnPolygon.getLatLngs()[0].map(function(latLng) {
+                return [latLng.lng, latLng.lat];
+            });
+            
+            var polygonName = prompt('Enter polygon name:', 'polygon_' + Date.now());
+            if (!polygonName) return;
+            
+            fetch('/gf_add_polygon', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    coordinates: latLngs,
+                    polygonName: polygonName,
+                    indexName: getIndexName()
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update the polygon's popup with the saved name
+                    var color = getPolygonColor(polygonName);
+                    drawnPolygon.bindPopup(`<b>${polygonName}</b><br>Polygon with ${latLngs.length} vertices<br>Color: ${color}<br>Status: Saved to geofence index '${getIndexName()}'`);
+                    
+                    document.getElementById('geofenceResults').innerHTML = 
+                        `<strong>GF.PADD Success:</strong><br>Added polygon '${polygonName}' to index '${getIndexName()}'`;
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => alert('Error adding polygon: ' + error));
+        });
+
+        document.getElementById('gfSearchPoly').addEventListener('click', function() {
+            // Check if we have any polygons (drawn or loaded)
+            var hasPolygons = drawnPolygon || geoMarkers.some(marker => marker instanceof L.Polygon);
+            
+            if (!hasPolygons) {
+                alert('No polygons available. Please draw a polygon or load from geofence index first.');
+                return;
+            }
+            
+            var polygonName = prompt('Enter polygon name to search from:', 'polygon_name');
+            if (!polygonName) return;
+            
+            fetch('/gf_search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    indexName: getIndexName(),
+                    searchType: document.getElementById('searchType').value,
+                    searchMethod: 'FROMPOLY',
+                    searchParams: [polygonName]
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayGeofenceResults('GF.SEARCH ' + document.getElementById('searchType').value, data.results);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => alert('Error searching: ' + error));
+        });
+
+        document.getElementById('gfSearchCoord').addEventListener('click', function() {
+            // Find any available polygon (drawn or loaded)
+            var searchPolygon = drawnPolygon;
+            if (!searchPolygon) {
+                // Look for loaded polygons
+                var loadedPolygon = geoMarkers.find(marker => marker instanceof L.Polygon);
+                if (loadedPolygon) {
+                    searchPolygon = loadedPolygon;
+                }
+            }
+            
+            if (!searchPolygon) {
+                alert('No polygons available. Please draw a polygon or load from geofence index first.');
+                return;
+            }
+            
+            var latLngs = searchPolygon.getLatLngs()[0];
+            var coords = [];
+            coords.push(latLngs.length);
+            latLngs.forEach(function(latLng) {
+                coords.push(latLng.lng, latLng.lat);
+            });
+            
+            fetch('/gf_search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    indexName: getIndexName(),
+                    searchType: document.getElementById('searchType').value,
+                    searchMethod: 'FROMPOLYCOORD',
+                    searchParams: coords
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayGeofenceResults('GF.SEARCH ' + document.getElementById('searchType').value, data.results);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => alert('Error searching: ' + error));
+        });
+
+        document.getElementById('gfCluster').addEventListener('click', function() {
+            var algorithm = document.getElementById('clusterAlgorithm').value;
+            var params = [];
+            
+            // Add algorithm-specific parameters
+            if (algorithm === 'GEOHASH') {
+                var precision = document.getElementById('precision').value;
+                if (precision) {
+                    params.push('PRECISION', precision);
+                }
+            } else if (algorithm === 'KMEANS') {
+                var clusters = document.getElementById('clusters').value;
+                if (clusters) {
+                    params.push('CLUSTERS', clusters);
+                }
+            }
+            
+            // Add count parameter if specified (works for both algorithms)
+            var maxCount = document.getElementById('maxCount').value;
+            if (maxCount) {
+                params.push('COUNT', maxCount);
+            }
+            
+            fetch('/gf_cluster', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    indexName: getIndexName(),
+                    algorithm: algorithm,
+                    params: params
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayClusterResults(data.clusters);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => alert('Error clustering: ' + error));
+        });
+
+        function displayGeofenceResults(operation, results) {
+            var html = `<strong>${operation} Results:</strong><br>`;
+            html += `Found ${results.length} items:<ul>`;
+            results.forEach(function(item) {
+                html += `<li>${item}</li>`;
+            });
+            html += '</ul>';
+            document.getElementById('geofenceResults').innerHTML = html;
+        }
+
+        document.getElementById('loadGeofenceData').addEventListener('click', function() {
+            fetch('/load_geofence_data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    indexName: getIndexName()
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    renderGeofenceData(data.geo_data);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => alert('Error loading geofence data: ' + error));
+        });
+
+        function calculatePolygonArea(coordinates) {
+            // Simple area calculation using shoelace formula
+            let area = 0;
+            for (let i = 0; i < coordinates.length; i++) {
+                const j = (i + 1) % coordinates.length;
+                area += coordinates[i][0] * coordinates[j][1];
+                area -= coordinates[j][0] * coordinates[i][1];
+            }
+            return Math.abs(area) / 2;
+        }
+
+        function renderGeofenceData(geoData) {
+            // Clear existing markers
+            geoMarkers.forEach(marker => map.removeLayer(marker));
+            geoMarkers = [];
+            
+            if (geoData.length === 0) {
+                document.getElementById('geofenceResults').innerHTML = '<strong>Loaded from Geofence Index:</strong><br>No data found in index.';
+                return;
+            }
+            
+            var html = `<strong>Loaded from Geofence Index:</strong><br>Found ${geoData.length} items:<ul>`;
+            
+            // Sort polygons by area (largest first) so smaller ones render on top
+            const polygons = geoData.filter(item => item.type === 'polygon');
+            const points = geoData.filter(item => item.type === 'point');
+            
+            polygons.sort((a, b) => {
+                const areaA = calculatePolygonArea(a.coordinates);
+                const areaB = calculatePolygonArea(b.coordinates);
+                return areaB - areaA; // Largest first
+            });
+            
+            // Render polygons first (largest to smallest)
+            polygons.forEach((item, index) => {
+                const latLngs = item.coordinates.map(coord => [coord[1], coord[0]]); // Convert [lon,lat] to [lat,lon]
+                const color = getPolygonColor(item.name);
+                const area = calculatePolygonArea(item.coordinates);
+                const zIndex = 1000 - index; // Smaller polygons get higher z-index
+                
+                const polygon = L.polygon(latLngs, {
+                    color: color, 
+                    fillColor: color, 
+                    fillOpacity: 0.3,
+                    weight: 3,
+                    pane: 'overlayPane'
+                }).addTo(map);
+                
+                polygon.getElement().style.zIndex = zIndex;
+                polygon.bindPopup(`<b>${item.name}</b><br>Polygon with ${item.coordinates.length} vertices<br>Color: ${color}<br>Area: ${area.toFixed(6)}`);
+                polygon.on('click', function() {
+                    this.openPopup();
+                });
+                geoMarkers.push(polygon);
+                html += `<li><strong>Polygon:</strong> ${item.name} (${item.coordinates.length} vertices) - <span style="color: ${color};">●</span></li>`;
+            });
+            
+            // Render points last (always on top)
+            points.forEach(item => {
+                const marker = L.marker([item.lat, item.lon]).addTo(map);
+                marker.bindPopup(`<b>${item.name}</b><br>Point: ${item.lat}, ${item.lon}`);
+                geoMarkers.push(marker);
+                html += `<li><strong>Point:</strong> ${item.name} at (${item.lat}, ${item.lon})</li>`;
+            });
+            
+            html += '</ul>';
+            document.getElementById('geofenceResults').innerHTML = html;
+        }
+
+        function displayClusterResults(clusters) {
+            // Clear existing cluster markers
+            clusterMarkers.forEach(marker => map.removeLayer(marker));
+            clusterMarkers = [];
+            
+            var html = `<strong>GF.CLUSTER Results:</strong><br>`;
+            html += `Found ${clusters.length} clusters:<ul>`;
+            
+            var colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen'];
+            
+            clusters.forEach(function(cluster, index) {
+                var color = colors[index % colors.length];
+                
+                // Create a larger, more prominent cluster marker
+                var marker = L.circleMarker([cluster.centroid_lat, cluster.centroid_lon], {
+                    radius: 15 + (cluster.count * 2), // Size based on cluster count
+                    fillColor: color,
+                    color: 'white',
+                    weight: 3,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).addTo(map);
+                
+                // Add text label showing count
+                var textIcon = L.divIcon({
+                    className: 'cluster-label',
+                    html: `<div style="background: ${color}; color: white; border: 2px solid white; border-radius: 50%; width: ${30 + (cluster.count * 4)}px; height: ${30 + (cluster.count * 4)}px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">${cluster.count}</div>`,
+                    iconSize: [30 + (cluster.count * 4), 30 + (cluster.count * 4)],
+                    iconAnchor: [15 + (cluster.count * 2), 15 + (cluster.count * 2)]
+                });
+                
+                var labelMarker = L.marker([cluster.centroid_lat, cluster.centroid_lon], {
+                    icon: textIcon,
+                    zIndexOffset: 1000
+                }).addTo(map);
+                
+                marker.bindPopup(`<b>Cluster ${cluster.id}</b><br>Count: ${cluster.count}<br>Centroid: ${cluster.centroid_lat}, ${cluster.centroid_lon}`);
+                labelMarker.bindPopup(`<b>Cluster ${cluster.id}</b><br>Count: ${cluster.count}<br>Centroid: ${cluster.centroid_lat}, ${cluster.centroid_lon}`);
+                
+                clusterMarkers.push(marker);
+                clusterMarkers.push(labelMarker);
+                
+                html += `<li>Cluster ${cluster.id}: ${cluster.count} points at (${cluster.centroid_lat.toFixed(6)}, ${cluster.centroid_lon.toFixed(6)})</li>`;
+            });
+            
+            html += '</ul>';
+            document.getElementById('geofenceResults').innerHTML = html;
+        }
     </script>
 </body>
 </html>
