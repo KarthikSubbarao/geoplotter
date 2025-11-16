@@ -16,14 +16,14 @@ def save_locations():
     try:
         data = request.get_json()  # Get the polygon data from the frontend
         location_markers = data.get('locationMarkers', [])
+        index_name = data.get('indexName', 'MAP')
         print("Received location_markers: " + str(location_markers))    
         r = valkey.StrictValkey(host='localhost', port=7000, db=0)
-        key = "MAP"
         for marker in location_markers:
             lon = marker.get('lon')
             lat = marker.get('lat')
             name = marker.get('name')
-            resp = r.execute_command('GEOADD', key, lon, lat, name)
+            resp = r.execute_command('GEOADD', index_name, lon, lat, name)
             print(resp)        
     except Exception as e:
         print("Error in save_locations: " + str(e))
@@ -52,30 +52,51 @@ def submit_polygon():
     print(geo_data)
     return jsonify({"geo_data": geo_data})
 
-@app.route('/load_valkey_data', methods=['GET'])
+@app.route('/load_valkey_data', methods=['POST'])
 def load_valkey_data():
     import valkey
-    geo_data_key = "MAP"
-    geo_data = []
-    # Set up valkey connection
     try:
+        data = request.get_json()
+        if not data:
+            data = {}
+        geo_data_key = data.get('indexName', 'MAP')
+        geo_data = []
+        print(f"Loading data from GEO index: {geo_data_key}")
+        
+        # Set up valkey connection
         r = valkey.StrictValkey(host='localhost', port=7000, db=0)
+        
+        # Check if key exists
+        if not r.exists(geo_data_key):
+            print(f"GEO index '{geo_data_key}' does not exist")
+            return jsonify({"geo_data": []})
+        
         # Fetch all members from the sorted set (this gets the names of the locations)
         members = r.zrange(geo_data_key, 0, -1)
-        print("Fetched members:", members)  # Debugging line to print fetched members
+        print(f"Fetched {len(members)} members from {geo_data_key}: {members}")
+        
         for member in members:
-            # Fetch the position of each member using GEOPOS
-            pos = r.geopos(geo_data_key, member)
-            print(f"Position for {member}: {pos}")  # Debugging line to print each position
-            if pos and pos[0]:
-                geo_data.append({
-                    "name": member.decode("utf-8"),  # Decode byte string to string
-                    "lat": pos[0][1],
-                    "lon": pos[0][0]
-                })
+            try:
+                # Fetch the position of each member using GEOPOS
+                pos = r.geopos(geo_data_key, member)
+                print(f"Position for {member}: {pos}")
+                if pos and pos[0]:
+                    geo_data.append({
+                        "name": member.decode("utf-8") if isinstance(member, bytes) else str(member),
+                        "lat": pos[0][1],
+                        "lon": pos[0][0]
+                    })
+            except Exception as member_error:
+                print(f"Error processing member {member}: {member_error}")
+                continue
+        
+        print(f"Returning {len(geo_data)} geo data points")
+        return jsonify({"geo_data": geo_data})
     except Exception as e:
-        print("error in load_valkey_data: " + str(e))
-    return jsonify({"geo_data": geo_data})
+        print(f"Error in load_valkey_data: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/flush_valkey', methods=['GET'])
@@ -180,6 +201,39 @@ def gf_cluster():
         return jsonify({"success": True, "clusters": clusters})
     except Exception as e:
         print("Error in gf_cluster: " + str(e))
+        return jsonify({"success": False, "error": str(e)}), 400
+
+@app.route('/geo_cluster', methods=['POST'])
+def geo_cluster():
+    import valkey
+    try:
+        data = request.get_json()
+        index_name = data.get('indexName', 'MAP')
+        precision = data.get('precision')
+        max_count = data.get('maxCount')
+        
+        r = valkey.StrictValkey(host='localhost', port=7000, db=0)
+        
+        cmd = ['GEOCLUSTER', index_name]
+        if precision:
+            cmd.extend(['PRECISION', str(precision)])
+        if max_count:
+            cmd.extend(['MAXCOUNT', str(max_count)])
+        
+        result = r.execute_command(*cmd)
+        
+        clusters = []
+        for cluster in result:
+            clusters.append({
+                'id': cluster[0].decode('utf-8') if isinstance(cluster[0], bytes) else str(cluster[0]),
+                'count': int(cluster[1]),
+                'centroid_lon': float(cluster[2]),
+                'centroid_lat': float(cluster[3])
+            })
+        
+        return jsonify({"success": True, "clusters": clusters})
+    except Exception as e:
+        print("Error in geo_cluster: " + str(e))
         return jsonify({"success": False, "error": str(e)}), 400
 
 @app.route('/load_geofence_data', methods=['POST'])

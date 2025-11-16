@@ -17,6 +17,9 @@
             word-wrap: break-word;
             overflow-y: scroll;
         }
+        #geofenceSection {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -27,35 +30,44 @@
     <button id="flushValkey">Flush Valkey Server</button>
     
     <h3>Standard GEO Commands</h3>
-    <button id="submitPolygon">List Polygon Coords and Search</button>
-    <button id="submitLocations">List Location Coords and Save</button>
-    <button id="loadFromValkey">Load standard Geoindexes from Valkey Server</button>
+    <input type="text" id="geoIndexName" placeholder="GEO index name (default: MAP)" style="margin-right: 10px;">
+    <button id="submitPolygon">GEOSEARCH BYPOLYGON</button>
+    <button id="submitLocations">GEOADD Points</button>
+    <button id="loadFromValkey">Load standard geo index</button>
+    <br><br>
+    <input type="number" id="geoPrecision" placeholder="Precision (1-12)" min="1" max="12" style="width: 120px; margin-right: 5px;">
+    <input type="number" id="geoMaxCount" placeholder="Max count" min="1" style="width: 100px; margin-right: 5px;">
+    <button id="geoCluster">GEOCLUSTER</button>
     
-    <h3>Geofence Commands</h3>
-    <input type="text" id="indexName" placeholder="Index name (default: gf_index)" style="margin-right: 10px;">
-    <button id="gfAddPoints">GF.ADD Points</button>
-    <button id="gfAddPolygon">GF.PADD Polygon</button>
-    <br><br>
-    <select id="searchType" style="margin-right: 10px;">
-        <option value="WITHIN">WITHIN</option>
-        <option value="CONTAINS">CONTAINS</option>
-        <option value="INTERSECTS">INTERSECTS</option>
-    </select>
-    <button id="gfSearchPoly">GF.SEARCH from Polygon</button>
-    <button id="gfSearchCoord">GF.SEARCH from Coordinates</button>
-    <br><br>
-    <select id="clusterAlgorithm" style="margin-right: 10px;">
-        <option value="GEOHASH">GEOHASH</option>
-        <option value="KMEANS">KMEANS</option>
-    </select>
-    <span id="clusterInputs">
-        <input type="number" id="precision" placeholder="Precision (1-12)" min="1" max="12" style="width: 120px; margin-right: 5px;">
-        <input type="number" id="clusters" placeholder="K clusters" min="1" style="width: 100px; margin-right: 5px; display: none;">
-    </span>
-    <input type="number" id="maxCount" placeholder="Max count" min="1" style="width: 100px; margin-right: 5px;">
-    <button id="gfCluster">GF.CLUSTER</button>
-    <br><br>
-    <button id="loadGeofenceData">Load from Geofence Index</button>
+    <h3>
+        <button id="geofenceToggle" style="background: none; border: none; font-size: inherit; cursor: pointer; text-decoration: underline;">Future GEO Capability ▼</button>
+    </h3>
+    <div id="geofenceSection">
+        <input type="text" id="indexName" placeholder="Index name (default: gf_index)" style="margin-right: 10px;">
+        <button id="gfAddPoints">GF.ADD Points</button>
+        <button id="gfAddPolygon">GF.PADD Polygon</button>
+        <br><br>
+        <select id="searchType" style="margin-right: 10px;">
+            <option value="WITHIN">WITHIN</option>
+            <option value="CONTAINS">CONTAINS</option>
+            <option value="INTERSECTS">INTERSECTS</option>
+        </select>
+        <button id="gfSearchPoly">GF.SEARCH from Polygon</button>
+        <button id="gfSearchCoord">GF.SEARCH from Coordinates</button>
+        <br><br>
+        <select id="clusterAlgorithm" style="margin-right: 10px;">
+            <option value="GEOHASH">GEOHASH</option>
+            <option value="KMEANS">KMEANS</option>
+        </select>
+        <span id="clusterInputs">
+            <input type="number" id="precision" placeholder="Precision (1-12)" min="1" max="12" style="width: 120px; margin-right: 5px;">
+            <input type="number" id="clusters" placeholder="K clusters" min="1" style="width: 100px; margin-right: 5px; display: none;">
+        </span>
+        <input type="number" id="maxCount" placeholder="Max count" min="1" style="width: 100px; margin-right: 5px;">
+        <button id="gfCluster">GF.CLUSTER</button>
+        <br><br>
+        <button id="loadGeofenceData">Load geofence index</button>
+    </div>
 
     <div id="coordinatesBox" placeholder="Polygon coordinates will appear here..."></div>
     <div id="locationBox" placeholder="Location coordinates will appear here..."></div>
@@ -162,18 +174,19 @@
             }
         });
 
-        // Submit button for locations
+        // Submit button for locations (GEOADD)
         document.getElementById('submitLocations').addEventListener('click', function() {
             if (locationMarkers.length > 0) {
-                // // Display the formatted locations in the text box
-                // document.getElementById('locationBox').textContent = 'Location Coordinates:' + locationsSummary;
-                // Send a POST request to the Flask backend
+                // Send a POST request to the Flask backend with configurable index name
                 fetch('/save_locations', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ "locationMarkers": locationMarkers })
+                    body: JSON.stringify({ 
+                        "locationMarkers": locationMarkers,
+                        "indexName": getGeoIndexName()
+                    })
                 })
                 .then(response => response.json())
                 .then(data => {
@@ -209,7 +222,7 @@
                 // Display the formatted coordinates in the text box
                 document.getElementById('coordinatesBox').innerHTML = '<b>Polygon Coordinates:</b><br>' + formattedCoordinates;
 
-                cmd = 'GEOSEARCH MAP BYPOLYGON' + formattedCoordinates;
+                cmd = 'GEOSEARCH ' + getGeoIndexName() + ' BYPOLYGON' + formattedCoordinates;
 
                 // Send the polygon data to the backend
                 fetch('/submit_polygon', {
@@ -278,8 +291,12 @@
         }
 
         document.getElementById('loadFromValkey').addEventListener('click', function() {
-            // Send a GET request to fetch the coordinates from the backend
-            fetch('/load_valkey_data')
+            // Send a POST request to fetch the coordinates from the backend with index name
+            fetch('/load_valkey_data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ "indexName": getGeoIndexName() })
+            })
             .then(response => response.json())
             .then(data => {
                 console.log(data);
@@ -292,6 +309,33 @@
             .catch(error => {
                 alert("Error fetching coordinates!");
             });
+        });
+        
+        // GEOCLUSTER button handler
+        document.getElementById('geoCluster').addEventListener('click', function() {
+            var precision = document.getElementById('geoPrecision').value;
+            var maxCount = document.getElementById('geoMaxCount').value;
+            
+            fetch('/geo_cluster', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    indexName: getGeoIndexName(),
+                    precision: precision || null,
+                    maxCount: maxCount || null
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayClusterResults(data.clusters);
+                    document.getElementById('searchResults').innerHTML = 
+                        `<strong>GEOCLUSTER Results:</strong><br>Found ${data.clusters.length} clusters in index '${getGeoIndexName()}'`;
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => alert('Error clustering: ' + error));
         });
 
         function renderGeoData(geoData) {
@@ -377,6 +421,10 @@
             return document.getElementById('indexName').value || 'gf_index';
         }
         
+        function getGeoIndexName() {
+            return document.getElementById('geoIndexName').value || 'MAP';
+        }
+        
         function getPolygonColor(polygonName) {
             if (!polygonColorMap[polygonName]) {
                 polygonColorMap[polygonName] = polygonColors[polygonColorIndex % polygonColors.length];
@@ -404,6 +452,20 @@
         
         // Initialize cluster inputs on page load
         updateClusterInputs();
+        
+        // Geofence section toggle
+        document.getElementById('geofenceToggle').addEventListener('click', function() {
+            var section = document.getElementById('geofenceSection');
+            var toggle = document.getElementById('geofenceToggle');
+            
+            if (section.style.display === 'none') {
+                section.style.display = 'block';
+                toggle.innerHTML = 'Future GEO Capability ▼';
+            } else {
+                section.style.display = 'none';
+                toggle.innerHTML = 'Future GEO Capability ►';
+            }
+        });
 
         document.getElementById('gfAddPoints').addEventListener('click', function() {
             if (locationMarkers.length === 0) {
@@ -686,6 +748,8 @@
             html += '</ul>';
             document.getElementById('geofenceResults').innerHTML = html;
         }
+
+
 
         function displayClusterResults(clusters) {
             // Clear existing cluster markers
