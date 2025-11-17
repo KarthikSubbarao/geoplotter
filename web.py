@@ -211,10 +211,19 @@ def geo_cluster():
         index_name = data.get('indexName', 'MAP')
         precision = data.get('precision')
         max_count = data.get('maxCount')
+        polygon_coords = data.get('polygonCoords')  # Array of [lon, lat] pairs
         
         r = valkey.StrictValkey(host='localhost', port=7000, db=0)
         
         cmd = ['GEOCLUSTER', index_name]
+        
+        # Add BYPOLYGON if coordinates provided
+        if polygon_coords and len(polygon_coords) > 0:
+            cmd.append('BYPOLYGON')
+            cmd.append(str(len(polygon_coords)))
+            for coord in polygon_coords:
+                cmd.extend([str(coord[0]), str(coord[1])])  # lon, lat
+        
         if precision:
             cmd.extend(['PRECISION', str(precision)])
         if max_count:
